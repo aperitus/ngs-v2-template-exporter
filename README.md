@@ -1,98 +1,140 @@
-# NGS v2 – Template Exporter (v2.0.0)
+# NGS v2 – Template Exporter
 
-**Goal:** Export live Azure network state into **subscription‑scope deployable ARM templates** that the Net Guard Deployment Stack can consume with guard rails.
-
-Works with: Bash + Azure CLI + jq (no Terraform required for export).  
-Outputs: `main.subscription.json` + `rg-*.network.json` + `report.json`
-
-## Features (v2.0.0)
-- Discovers VNets, Subnets, Route Tables (+ routes), NSGs (+ rules) across one or more RGs.
-- Builds **per‑RG** ARM templates (RG‑scoped) with required `location` and normalized shapes.
-- Emits a **subscription‑scope wrapper** that nests each RG template via inline `template`.
-- Uses **fully‑qualified** cross‑RG IDs for Subnet→UDR and Subnet→NSG associations.
-- Enforces **single** `addressPrefix` on subnets (first prefix by default; or **fail** via flag).
-- Deterministic ordering; JSON is pretty‑printed and stable.
-- Logging and `--debug` for deep diagnostics.
-- Report (`report.json`) summarizing discovered items and normalizations.
-
-## Requirements
-- **Azure CLI** (logged in; Reader or above)  
-- **jq** 1.6+  
-- Bash 4+
-
-## Quick Start
-```bash
-# 1) Ensure az login and correct subscription context
-az account set --subscription "<SUB_ID>"
-
-# 2) Run exporter
-./exporter/ngs-template-exporter.sh   --subscription-id "<SUB_ID>"   --rg rg-demo-core-uks-01   --rg rg-demo-sec-uks-01   --outdir ./out   --normalize-address-prefix first   --log-level info
-
-# 3) Inspect outputs
-tree ./out
-# ./out
-# ├─ main.subscription.json
-# ├─ rg-rg-demo-core-uks-01.network.json
-# ├─ rg-rg-demo-sec-uks-01.network.json
-# └─ report.json
-```
-
-## CLI
-```
-ngs-template-exporter.sh
-  --subscription-id <id>            (required)
-  [--rg <name>]...                  One or more RGs. If omitted, scans entire subscription.
-  [--region-filter <regex>]         Include only resources in regions matching regex.
-  [--include natgw]                 (placeholder) Discover NAT Gateways (not emitted in v2.0.0).
-  [--outdir <path>]                 Output directory (default: ./out)
-  [--normalize-address-prefix first|fail]  Default: first
-  [--format arm]                    Only 'arm' supported in v2.0.0
-  [--log-level info|debug]          Default: info
-  [--debug]                         Alias for --log-level debug
-  [-h|--help]
-```
-
-## Output Contract
-- **Subscription wrapper** (`main.subscription.json`):  
-  - `$schema`: 2019‑04‑01 template schema  
-  - Contains one `Microsoft.Resources/deployments` per RG (`Incremental`, `expressionEvaluationOptions.scope: inner`) with the RG‑scoped template inlined as `template`.
-  - _Cross‑RG deploy ordering_: basic heuristic sets `dependsOn` where a subnet references a UDR/NSG in another RG. (See **Limitations**.)
-
-- **Per‑RG template** (`rg-<rg>.network.json`):
-  - Declares VNets (with `location`), Route Tables (+ routes), NSGs (+ rules), and Subnets (with **single** `addressPrefix`).  
-  - Subnet associations (to UDR/NSG) use **fully‑qualified** `resourceId(subscription().subscriptionId,'<rg>','<type>','<name>')`.
-
-- **Report** (`report.json`):
-  - Counts, lists, normalization decisions (e.g., which subnets truncated multiple prefixes), and cross‑RG edges.
-
-## Limitations (to be addressed in 2.1.x)
-- **Cross‑RG dependsOn** uses a heuristic (parses discovered associations) and may be conservative. If ordering is insufficient on first deploy, re‑apply or split runs by RG to prime producers before consumers.
-- `addressPrefixes` with multiple entries are truncated to the first unless `--normalize-address-prefix fail` is set.
-- NAT Gateway discovery is logged (when `--include natgw`) but **not** yet emitted to templates.
-- Only ARM JSON output; Bicep planned for v2.1.x.
-
-## Logging & Debugging
-- `--log-level debug` (or `--debug`) prints executed `az` commands and raw payload sizes.
-- All decisions are echoed with `INFO` lines; `DEBUG` shows parsed fragments (resource names, RGs, counts).
-
-## Versioning
-- Semantic versioning: **major.minor.build**, starting at **2.0.0** for NGS v2.
-- Version stored in `exporter/version.txt` and echoed into `main.subscription.json` metadata (`x-ngs-version`).
-
-## Alignment with Net Guard Deployment Stack
-- Subscription‑scope wrapper
-- RG nested deployments specify `resourceGroup` without `location`
-- VNets/UDRs/NSGs carry `location`
-- **Subnets use `addressPrefix` (singular)**
-- Subnet→UDR association uses fully‑qualified IDs
-- Optional Day‑2 flags kept as‑is if present on source subnets:
-  - `privateEndpointNetworkPolicies`, `privateLinkServiceNetworkPolicies`, `serviceEndpoints`
-
-## Example: Generate from entire subscription
-```bash
-./exporter/ngs-template-exporter.sh   --subscription-id "<SUB_ID>"   --outdir ./out-all --log-level info
-```
+**BLUF:** Exports Azure Virtual Network topology (VNets, subnets, UDRs, NSGs) into
+**per‑RG ARM templates** and a **subscription‑scope wrapper** that can be
+`what-if`/deployed idempotently. Designed to feed the Net Guard Deployment Stack.
 
 ---
 
-© 2025-11-09 Net Guard Deployment Stack v2 — Template Exporter
+## Features
+- **Per‑RG templates**: `resGrp-<rg>.network.json` for VNets, route tables, and NSGs.
+- **Subscription wrapper**: `main.subscription.json` stitches RG templates together.
+- **Cross‑RG safe**: builds `dependsOn` between RG deployments using **4‑arg `resourceId`**
+  to target the **RG‑scoped** nested deployments at **subscription scope**.
+- **Cycle breaking**: if A↔B dependencies exist, only **max(A,B) → min(A,B)** is kept.
+- **Subnet fidelity**: preserves `addressPrefix`, `serviceEndpoints`, **delegations**
+  (correct ARM shape), and day‑2 flags (`privateEndpointNetworkPolicies`,
+  `privateLinkServiceNetworkPolicies`).
+- **Deterministic output**: stable ordering for clean diffs.
+- **Logging & debugging**: `--log-level` and raw dumps (`--dump-raw`).
+
+## Requirements
+- Bash (Linux/macOS/WSL)
+- Azure CLI ≥ 2.40 (tested with 2.78.0)
+- jq 1.6+
+
+## Install
+Copy the `exporter/` folder into your repo (do **not** version the filename).
+You’ll have:
+```
+exporter/
+  ngs-template-exporter.sh
+  lib/log.sh
+  version.txt
+```
+
+## Usage
+Basic (single RG):
+```bash
+./exporter/ngs-template-exporter.sh \
+  --subscription-id "<subId>" \
+  --rg rg-demo-core-uks-01 \
+  --outdir ./out \
+  --normalize-address-prefix first \
+  --log-level info
+```
+
+Multiple RGs:
+```bash
+./exporter/ngs-template-exporter.sh \
+  --subscription-id "<subId>" \
+  --rg rg-demo-core-uks-01 \
+  --rg rg-demo-core-uks-02 \
+  --outdir ./out
+```
+
+Whole subscription:
+```bash
+./exporter/ngs-template-exporter.sh \
+  --subscription-id "<subId>" \
+  --outdir ./out
+```
+
+Skip cross‑RG dependencies (handy when exporting just one RG):
+```bash
+./exporter/ngs-template-exporter.sh ... --no-cross-rg-deps
+```
+
+Dump raw Azure payloads for inspection:
+```bash
+./exporter/ngs-template-exporter.sh ... --dump-raw --log-level debug
+```
+
+## Outputs
+- `./out/main.subscription.json` — subscription‑scope wrapper:
+  - Nested deployments named `dep-<rg>`
+  - Cross‑RG `dependsOn` using:
+    ```
+    [resourceId(subscription().subscriptionId, '<rg>', 'Microsoft.Resources/deployments', 'dep-<rg>')]
+    ```
+  - Cycle‑safe ordering.
+- `./out/resGrp-<rg>.network.json` — RG‑scoped ARM with:
+  - `Microsoft.Network/virtualNetworks` (subnets inline)
+  - `Microsoft.Network/routeTables`
+  - `Microsoft.Network/networkSecurityGroups`
+- `./out/report.json` — run metadata and the raw cross‑RG edge list.
+
+## Design Notes
+- **Subnet delegations** are emitted in the ARM‑compliant shape and **names are preserved verbatim**:
+  ```json
+  "delegations": [
+    { "name": "Microsoft.AzureCosmosDB/clusters", "properties": { "serviceName": "Microsoft.AzureCosmosDB/clusters" } }
+  ]
+  ```
+- **Address prefixes**: if `addressPrefix` is missing but `addressPrefixes[]` exists,
+  the exporter uses the **first** entry when `--normalize-address-prefix first` is set.
+- **Read‑only fields** (e.g., `provisioningState`, `serviceEndpoints[].locations`) are omitted.
+
+## What‑If / Deploy
+```bash
+az deployment sub what-if   --name ngs-export-test   --location uksouth   --template-file ./out/main.subscription.json
+
+az deployment sub create   --name ngs-export-apply   --location uksouth   --template-file ./out/main.subscription.json
+```
+
+## Troubleshooting
+- **“Resource ... is not defined in the template”**  
+  Export all RGs referenced by cross‑RG associations **or** use `--no-cross-rg-deps`.
+- **“InvalidTemplate ... ResourceId string character ... not expected”**  
+  Ensure wrapper uses **single quotes** inside ARM functions. Current build does.
+- **Delegation validation errors**  
+  The exporter now outputs the correct shape; if you still see a diff, verify the
+  delegation **name** matches Azure exactly.
+- **Cycles** (A depends on B and B depends on A)  
+  The exporter keeps only `max(A,B) → min(A,B)` to remove the cycle.
+
+## Versioning
+Semantic: **major.minor.build** (starting at `2.0.0`).  
+This repo currently tracks builds `2.0.1` .. `2.0.12`.
+
+## Author
+Andrew Clarke
+
+## License
+MIT (or project default)
+
+## CLI Options
+
+| Option | Description | Why/When to use it |
+|---|---|---|
+| `--subscription-id <id>` | **Required.** Azure subscription GUID to target. | Ensures all discovery and wrapper deployments are scoped to the correct subscription; always include this. |
+| `--rg <name>` | Resource group filter (repeatable). If omitted, scans the entire subscription. | Use multiple `--rg` flags to export only the RGs you plan to what‑if/apply now, speeding up runs and reducing noise. |
+| `--region-filter <regex>` | Filter discovered resources by Azure region name (regex). | Helpful in large estates to limit output to regions like `^uk(south|west)$`. |
+| `--include natgw` | Also discover NAT Gateways (logged only for now). | Enables forward‑compat logging so you can see NATGW inventory before we add emit support. |
+| `--outdir <path>` | Output directory (default: `./out`). | Keep exports separate per run or repo; useful for CI artifacts. |
+| `--normalize-address-prefix first\|fail` | Normalize subnet `addressPrefixes` to a single `addressPrefix`. Default: `first`. | Use `first` for idempotent templates when Azure returns arrays; switch to `fail` if you want to catch and fix multi‑prefix subnets manually. |
+| `--log-level info\|debug` | Controls verbosity (default: `info`). | Flip to `debug` when validating edge cases or investigating missing resources. |
+| `--debug` | Shortcut for `--log-level debug`. | Faster than typing the full flag; recommended during initial setup. |
+| `--dump-raw` | Save raw Azure payloads for each RG. | Creates `vnets.<rg>.json`, `routeTables.<rg>.json`, `nsgs.<rg>.json` for offline inspection and diffing. |
+| `--no-cross-rg-deps` | Do **not** add inter‑RG `dependsOn` in the wrapper. | Use when exporting/applying a single RG in isolation, or when you want to hand‑stage dependency order across RGs. |
+| `-h` / `--help` | Show usage help and exit. | Quick reference for flags and defaults without opening the README. |
