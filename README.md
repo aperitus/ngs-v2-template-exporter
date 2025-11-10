@@ -76,10 +76,10 @@ Dump raw Azure payloads for inspection:
 |---|---|---|
 | `--subscription-id <id>` | **Required.** Azure subscription GUID to target. | Ensures discovery and wrapper deployments are scoped to the correct subscription; always include this. |
 | `--rg <name>` | Resource group filter (repeatable). If omitted, scans the entire subscription. | Use multiple `--rg` flags to export only the RGs you plan to what-if/apply now, speeding up runs and reducing noise. |
-| `--region-filter <regex>` | Filter discovered resources by Azure region name (regex). | Helpful in large estates to limit output to regions like `^uk(south|west)$`. |
+| `--region-filter <regex>` | Filter discovered resources by Azure region name (regex). | Helpful in large estates to limit output to regions like `^uk(south\|west)$`. |
 | `--include natgw` | Also discover NAT Gateways (logged only for now). | Enables forward-compat logging so you can see NATGW inventory before emit support. |
 | `--outdir <path>` | Output directory (default: `./out`). | Keep exports separate per run or repo; useful for CI artifacts. |
-| `--log-level info|debug` | Controls verbosity (default: `info`). | Flip to `debug` when validating edge cases or investigating missing resources. |
+| `--log-level info\|debug` | Controls verbosity (default: `info`). | Flip to `debug` when validating edge cases or investigating missing resources. |
 | `--debug` | Shortcut for `--log-level debug`. | Faster than typing the full flag; recommended during initial setup. |
 | `--dump-raw` | Save raw Azure payloads for each RG. | Creates `vnets.<rg>.json`, `routeTables.<rg>.json`, `nsgs.<rg>.json` for offline inspection and diffing. |
 | `--no-cross-rg-deps` | Do **not** add inter-RG `dependsOn` in the wrapper. | Use when exporting/applying a single RG in isolation, or when you want to hand-stage dependency order across RGs. |
@@ -141,4 +141,4 @@ This repo currently tracks builds `2.0.1` .. `2.0.14`.
 Andrew Clarke
 
 ## License
-MIT (or project default)
+MIT

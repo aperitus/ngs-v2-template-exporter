@@ -2,6 +2,20 @@
 
 All notable changes to this tool are documented here. Dates in UTC.
 
+All notable changes to this tool are documented here. Dates in UTC.
+## 2025-11-10 – v2.0.14
+- Fix: jq compile errors in v2.0.13
+  - Corrected `choose_prefix_object` nested `if … end` chain.
+  - Replaced edges regex `Microsoft\.Network` with `Microsoft[.]Network` in `capture()` to avoid invalid escapes.
+- Keep: safe-emission behaviour from v2.0.13 (omit empties/nulls; prefer `addressPrefixes`).
+
+## 2025-11-10 – v2.0.13
+- Safe re-apply emission rules:
+  - **Subnets:** only emit `serviceEndpoints` and `delegations` when non-empty; emit PE/PLS flags only when non-null; prefer `addressPrefixes` else `addressPrefix`.
+  - **NSGs:** include ASG bindings and `description` when present; avoid empty arrays/nulls.
+  - **Routes:** emit `nextHopIpAddress` only when set.
+- Add: `--strict-safety` flag to **hard fail** CI on unsafe empties/nulls.
+
 ## 2025-11-09 – v2.0.12
 - Fix: removed stray `- report.json` shell line causing non‑terminating error under `set -euo pipefail`.
 - Add: explicit `exit 0` at end of script.
