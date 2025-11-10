@@ -5,4 +5,5 @@ _lvl() { case "${LOG_LEVEL}" in debug) echo 10;; info) echo 20;; *) echo 20;; es
 _ok()  { local need=20; [[ "${1}" == "DEBUG" ]] && need=10; [[ $(_lvl) -le $need ]]; }
 log_info()  { _ok INFO  && echo "$(ts) INFO  $*"; }
 log_debug() { _ok DEBUG && echo "$(ts) DEBUG $*"; }
+log_warn()  { echo "$(ts) WARN  $*" >&2; }
 log_err()   { echo "$(ts) ERROR $*" >&2; }
