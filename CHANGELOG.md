@@ -1,51 +1,63 @@
-# Changelog
+# CHANGELOG
 
-All notable changes to this tool are documented here. Dates in UTC.
+## v2.0.25
+- **Fix:** jq syntax errors from prior “ternary-like” patterns removed; replaced with valid `if/then/else` and additive objects.
+- **Feature:** Tag preservation **on by default** across VNets, NSGs, RTs, NAT GW, VNet GW, PIPs, PIPPs.
+- **Option:** `--no-tags` to disable tag emission.
+- **Reliability:** Stronger peering/PIP dependency graphing and null-remote peering guard.
+- **Docs:** Expanded README (BLUF, parameters, troubleshooting, known issues, version constraints).
 
-All notable changes to this tool are documented here. Dates in UTC.
-## 2025-11-10 – v2.0.14
-- Fix: jq compile errors in v2.0.13
-  - Corrected `choose_prefix_object` nested `if … end` chain.
-  - Replaced edges regex `Microsoft\.Network` with `Microsoft[.]Network` in `capture()` to avoid invalid escapes.
-- Keep: safe-emission behaviour from v2.0.13 (omit empties/nulls; prefer `addressPrefixes`).
+## v2.0.24
+- **Feature:** Initial tag preservation logic (now superseded), surfaced `Emit tags: ON` in logs.
+- **Fix:** Inter-RG `dependsOn` string rendering corrected to ARM expression format.
 
-## 2025-11-10 – v2.0.13
-- Safe re-apply emission rules:
-  - **Subnets:** only emit `serviceEndpoints` and `delegations` when non-empty; emit PE/PLS flags only when non-null; prefer `addressPrefixes` else `addressPrefix`.
-  - **NSGs:** include ASG bindings and `description` when present; avoid empty arrays/nulls.
-  - **Routes:** emit `nextHopIpAddress` only when set.
-- Add: `--strict-safety` flag to **hard fail** CI on unsafe empties/nulls.
+## v2.0.23
+- **Feature:** NAT Gateway + referenced Public IP/Prefix discovery & emission; dependency edges added to wrapper.
+- **Feature:** VNet Gateway + referenced PIP discovery & emission; dependency edges added to wrapper.
 
-## 2025-11-09 – v2.0.12
-- Fix: removed stray `- report.json` shell line causing non‑terminating error under `set -euo pipefail`.
-- Add: explicit `exit 0` at end of script.
-- Keep: all prior behaviour (delegations preserved, cycle‑safe deps, 4‑arg `resourceId`, `dep-<rg>` names).
+## v2.0.22
+- **Fix:** Cross-RG peering `dependsOn` generation corrected; ensures remote RG deployment runs before peering resources.
+- **Change:** Wrapper uses per-RG nested deployments with **no `location`** on nested resource (RG-scoped rule).
 
-## 2025-11-09 – v2.0.11
-- Change: preserve **delegation names verbatim** as returned by Azure to avoid spurious what‑if rename.
-- Keep: correct delegation object shape (`name` + `properties.serviceName`).
+## v2.0.21
+- **Safety:** Subnet emission hardened — omit empty arrays/nulls for `serviceEndpoints`, `delegations`, `*NetworkPolicies`.
+- **Docs:** Safety section added; guidance on what-if checks and empties detection.
 
-## 2025-11-09 – v2.0.10
-- Fix: emit **delegations** in ARM‑compliant shape (strip read‑only fields; `properties.serviceName` only).
+## v2.0.20
+- **Feature:** VNet peering emission enabled by default; exporter enumerates peerings via `az network vnet peering list` per VNet.
+- **Fix:** Skip peerings with `remoteVirtualNetwork.id == null`.
 
-## 2025-11-09 – v2.0.9
-- Fix: cross‑RG `dependsOn` now uses **4‑arg `resourceId(subscription().subscriptionId, rg, type, name)`**
-  to correctly reference **RG‑scoped** nested deployments at the subscription scope.
-- Add: `--no-cross-rg-deps` switch to strip inter‑RG dependencies from the wrapper.
+## v2.0.19
+- **Feature:** Inter‑RG dependency edges extracted from peerings; wrapper auto-adds `dependsOn` for producer→consumer RGs.
+- **Fix:** Wrapper names standardized: `dep-<rg>`. Per‑RG files renamed `resGrp-<rg>.network.json`.
 
-## 2025-11-09 – v2.0.8
-- Add: **cycle‑safe** inter‑RG dependency logic. If A↔B exists, keep only `(max(A,B) → min(A,B))`.
-- Keep: prior fixes.
+## v2.0.18
+- **Fix:** Escaping/quoting issues in `dependsOn` ARM expressions resolved (no backslash artifacts).
+- **Diagnostics:** Added `report.json` with edges list and RG inventory.
 
-## 2025-11-09 – v2.0.7
-- Add: **subnet delegations passthrough** (initial implementation).
+## v2.0.17
+- **Fix:** Syntax error near unexpected token from Bash arithmetic/arrays corrected.
+- **Feature:** `--dump-raw` to emit raw Azure payloads for inspection.
 
-## 2025-11-09 – v2.0.6
-- Change: nested deployment names → `dep-<rg>` (avoid `rg-rg-*` confusion).
-- Fix: safe quoting in `dependsOn` (`\u0027` single quotes) for embedded ARM expressions.
+## v2.0.16
+- **Safety:** Single-template strategy validated — exporter omits destructive empties/nulls to avoid clobbering live config.
+- **Docs:** Added guidance for single-template re-apply with Stack Deployer v2.1.2.
 
-## 2025-11-09 – v2.0.5
-- Fix: wrapper `dependsOn` quoting (inner **single quotes** instead of double) to satisfy ARM.
+## v2.0.15
+- **Fix:** Resource file naming normalized (`resGrp-<rg>.network.json`); avoided `rg-rg-` confusion.
+- **Docs:** Example commands updated.
 
-## 2025-11-09 – v2.0.1
-- Initial v2 cut used during export trials: per‑RG templates + subscription wrapper, logging, prefix normalisation.
+## v2.0.14
+- **Fix:** JQ quoting/escaping repaired for Windows/WSL shells.
+- **Feature:** `--no-cross-rg-deps` to disable wrapper `dependsOn` generation (advanced).
+
+## v2.0.13
+- **Fix:** JQ filter compile errors (unterminated if/capture escapes) resolved.
+- **Feature:** Early error messages now include the failing JQ line context.
+
+## v2.0.12
+- **Feature:** Baseline that fully round-trips VNets, subnets, NSGs, route tables with safe rules; minimal peerings.
+- **Docs:** Initial README and examples.
+
+## v2.0.11 and earlier
+- Early iterations, internal builds aligning with Net Guard Deployment Stack **v0.27** rules and exporter hardening.
