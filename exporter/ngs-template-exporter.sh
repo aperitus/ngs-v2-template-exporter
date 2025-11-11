@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NGS v2 – Template Exporter (v2.0.14)
+# NGS v2 – Template Exporter (v2.0.15)
 set -euo pipefail
 set -o errtrace
 trap 'echo "$(date -u +%FT%TZ) ERROR  Failed at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
@@ -15,7 +15,51 @@ if [[ -f "$SCRIPT_DIR/lib/log.sh" ]]; then source "$SCRIPT_DIR/lib/log.sh"; else
   log_err()   { echo "$(ts) ERROR $*" >&2; }
 fi
 
-VERSION="$(cat "$SCRIPT_DIR/version.txt" 2>/dev/null || echo "2.0.14")"
+VERSION="$(cat "$SCRIPT_DIR/version.txt" 2>/dev/null || echo "2.0.15")"
+
+# ---------- Preflight ----------
+req_az="2.40.0"
+req_jq="1.6"
+
+version_ge() {
+  local va vb
+  va=$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)
+  [[ "$va" == "$1" ]]
+}
+
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { log_err "Missing dependency: $1"; exit 2; }; }
+
+need_cmd az
+need_cmd jq
+
+AZ_VER="$(az --version 2>/dev/null | awk '/^azure-cli/ {print $2; exit}')"
+JQ_VER="$(jq --version 2>/dev/null | sed -E 's/^jq-//')"
+
+if [[ -z "${AZ_VER:-}" ]]; then
+  log_warn "Could not determine az version; proceeding. Recommended >= ${req_az}."
+else
+  if ! version_ge "$AZ_VER" "$req_az"; then
+    log_err "azure-cli ${AZ_VER} detected; require >= ${req_az}. Please run: az upgrade"
+    exit 2
+  fi
+fi
+
+if [[ -z "${JQ_VER:-}" ]]; then
+  log_warn "Could not determine jq version; proceeding. Recommended >= ${req_jq}."
+else
+  if ! version_ge "$JQ_VER" "$req_jq"; then
+    log_err "jq ${JQ_VER} detected; require >= ${req_jq}. Please install jq 1.6 or newer."
+    exit 2
+  fi
+fi
+
+_tmp="$(mktemp)"; echo '{}' > "$_tmp"
+if ! jq -n --argfile t "$_tmp" '$t' >/dev/null 2>&1; then
+  rm -f "$_tmp"
+  log_err "Your jq build does not support --argfile. Please install jq >= ${req_jq}."
+  exit 2
+fi
+rm -f "$_tmp"
 
 SUBSCRIPTION_ID=""
 OUTDIR="./out"
@@ -43,6 +87,8 @@ Options:
   --no-cross-rg-deps                Do NOT add inter-RG dependsOn in wrapper
   --strict-safety                   Fail if dangerous empty arrays/nulls detected
   -h|--help                         Show help
+
+Requires: azure-cli >= ${req_az}, jq >= ${req_jq} (with --argfile support)
 EOF
 }
 
@@ -64,8 +110,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$SUBSCRIPTION_ID" ]] && { log_err "--subscription-id is required"; exit 1; }
-command -v az >/dev/null 2>&1 || { log_err "Azure CLI (az) not found"; exit 2; }
-command -v jq >/dev/null 2>&1 || { log_err "jq not found"; exit 2; }
 
 mkdir -p "$OUTDIR"
 REPORT="$OUTDIR/report.json"
@@ -239,9 +283,7 @@ for rg in "${RGS[@]}"; do
   emit_rg_template "$rg"
 done
 
-# Serialize edges
-EDGES_JSON="$(printf "%s
-" "${ALL_EDGES[@]:-}" | jq -R -s 'split("\n")|map(select(length>0))')"
+EDGES_JSON="$(printf "%s\n" "${ALL_EDGES[@]:-}" | jq -R -s 'split("\n")|map(select(length>0))')"
 
 echo "[]" > "$TMP_RES"
 
