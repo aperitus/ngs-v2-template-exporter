@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NGS v2 – Template Exporter (v2.0.25)
+# NGS v2 – Template Exporter (v2.0.26)
 set -euo pipefail
 set -o errtrace
 trap 'echo "$(date -u +%FT%TZ) ERROR  Failed at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
@@ -15,7 +15,7 @@ if [[ -f "$SCRIPT_DIR/lib/log.sh" ]]; then source "$SCRIPT_DIR/lib/log.sh"; else
   log_err()   { echo "$(ts) ERROR $*" >&2; }
 fi
 
-VERSION="2.0.25"
+VERSION="2.0.26"
 
 # ---------- Preflight ----------
 req_az="2.40.0"
@@ -51,6 +51,7 @@ EMIT_TAGS="true"
 DUMP_RAW="false"
 NO_CROSS_RG_DEPS="false"
 STRICT_SAFETY="false"
+SKIP_MANAGED="true"   # new: skip 'managed' RGs by default
 LOG_LEVEL="${LOG_LEVEL:-info}"
 
 print_help() {
@@ -71,6 +72,7 @@ Options:
   --no-cross-rg-deps                Do NOT add inter-RG dependsOn in wrapper
   --strict-safety                   Fail if dangerous empty arrays/nulls detected
   --no-tags                         Do NOT emit tags (default: emit when present)
+  --include-managed                 Include 'managed' resource groups (default: skip)
   -h|--help                         Show help
 
 Requires: azure-cli >= 2.40.0, jq >= 1.6 (with --argfile support)
@@ -98,6 +100,7 @@ while [[ $# -gt 0 ]]; do
     --no-cross-rg-deps) NO_CROSS_RG_DEPS="true"; shift ;;
     --strict-safety) STRICT_SAFETY="true"; shift ;;
     --no-tags) EMIT_TAGS="false"; shift ;;
+    --include-managed) SKIP_MANAGED="false"; shift ;;
     -h|--help) print_help; exit 0 ;;
     *) log_err "Unknown arg: $1"; print_help; exit 1 ;;
   esac
@@ -118,6 +121,7 @@ log_info "Subscription: $SUBSCRIPTION_ID"
 [[ "$INCLUDE_VNETGW" == "true" ]] && log_info "Emit VNet Gateways: ON"
 [[ "$INCLUDE_VNET_PEERING" == "true" ]] && log_info "Emit VNet Peerings: ON" || log_info "Emit VNet Peerings: OFF"
 [[ "$EMIT_TAGS" == "true" ]] && log_info "Emit tags: ON" || log_info "Emit tags: OFF"
+[[ "$SKIP_MANAGED" == "true" ]] && log_info "Skip managed RGs: ON" || log_info "Skip managed RGs: OFF"
 
 az account set --subscription "$SUBSCRIPTION_ID"
 
@@ -126,11 +130,27 @@ az_json() {
   else log_err "Azure CLI failed: az $* (stderr: /tmp/ngs-az.err)"; printf '[]'; fi
 }
 
+# discover RGs if none were provided, optionally skipping "managed" RGs
+SKIPPED_MANAGED_RGS=()
 if [[ ${#RGS[@]} -eq 0 ]]; then
-  mapfile -t RGS < <(az_json group list --subscription "$SUBSCRIPTION_ID" | jq -r '.[].name' | sort -u)
+  # pull all RGs
+  all="$(az_json group list --subscription "$SUBSCRIPTION_ID")"
+  if [[ "$SKIP_MANAGED" == "true" ]]; then
+    # managed RG heuristic: managedBy set OR name ends with "_managed" (case-insensitive)
+    mapfile -t RGS < <(echo "$all" | jq -r '[ .[]
+        | select( ((.managedBy // null) == null)
+                  and ( (.name | test("(?i)_managed$")) | not ) ) ].name | sort | .[]')
+    # record skipped for report/log
+    mapfile -t SKIPPED_MANAGED_RGS < <(echo "$all" | jq -r '[ .[]
+        | select( ((.managedBy // null) != null)
+                  or  (.name | test("(?i)_managed$")) ) ].name | sort | .[]')
+    for s in "${SKIPPED_MANAGED_RGS[@]:-}"; do log_warn "Skipping managed RG: $s"; done
+  else
+    mapfile -t RGS < <(echo "$all" | jq -r '.[].name' | sort -u)
+  fi
 fi
 
-ALL_EDGES=()  # "producerRG|consumerRG"
+ALL_EDGES=()  # "producerRG|consumerRG" (limited to same subscription)
 
 emit_rg_template() {
   local rg="$1"
@@ -167,13 +187,13 @@ emit_rg_template() {
   fi
 
   if [[ "$DUMP_RAW" == "true" ]]; then
-    echo "$vnets_json" > "$OUTDIR/vnets.${rg}.json"
-    echo "$rts_json"   > "$OUTDIR/routeTables.${rg}.json"
-    echo "$nsgs_json"  > "$OUTDIR/nsgs.${rg}.json"
-    echo "$natgw_json" > "$OUTDIR/natGateways.${rg}.json"
+    echo "$vnets_json"  > "$OUTDIR/vnets.${rg}.json"
+    echo "$rts_json"    > "$OUTDIR/routeTables.${rg}.json"
+    echo "$nsgs_json"   > "$OUTDIR/nsgs.${rg}.json"
+    echo "$natgw_json"  > "$OUTDIR/natGateways.${rg}.json"
     echo "$vnetgw_json" > "$OUTDIR/virtualNetworkGateways.${rg}.json"
-    echo "$pips_json"  > "$OUTDIR/publicIPs.${rg}.json"
-    echo "$pipp_json"  > "$OUTDIR/publicIPPrefixes.${rg}.json"
+    echo "$pips_json"   > "$OUTDIR/publicIPs.${rg}.json"
+    echo "$pipp_json"   > "$OUTDIR/publicIPPrefixes.${rg}.json"
   fi
 
   JQ_PROG="$(mktemp)"
@@ -317,7 +337,7 @@ emit_rg_template() {
            ) } ) ];
 
     def peering_resources_from_list($peerings; $vnetName):
-      [ ($peerings[]?) 
+      [ ($peerings[]?)
         | select(.remoteVirtualNetwork.id != null)
         | {
             "type":"Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
@@ -405,15 +425,16 @@ JQ
     fi
   fi
 
-  # Dependency edges from peerings
+  # Dependency edges from peerings (only within current subscription)
   if [[ "$INCLUDE_VNET_PEERING" == "true" ]]; then
     local edges
-    edges="$(echo "$peer_map" | jq -r --arg rg "$rg" '
+    edges="$(echo "$peer_map" | jq -r --arg rg "$rg" --arg sub "$SUBSCRIPTION_ID" '
       [ to_entries[]
         | .value[]?
         | .remoteVirtualNetwork.id
         | select(. != null)
-        | capture("/resourceGroups/(?<prodRG>[^/]+)/providers/(?<rtype>Microsoft[.]Network/virtualNetworks)/(?<rname>[^/]+)$")
+        | capture("/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<prodRG>[^/]+)/providers/(?<rtype>Microsoft[.]Network/virtualNetworks)/(?<rname>[^/]+)$")
+        | select(.sub == $sub)
         | "\(.prodRG)|\($rg)" ] | .[]?')"
     if [[ -n "$edges" ]]; then
       while IFS= read -r line; do [[ -n "$line" ]] && ALL_EDGES+=("$line"); done <<< "$edges"
@@ -424,6 +445,7 @@ JQ
 # Emit for each RG
 az account set --subscription "$SUBSCRIPTION_ID"
 if [[ ${#RGS[@]} -eq 0 ]]; then
+  # (already populated above; but keep fallback)
   mapfile -t RGS < <(az_json group list --subscription "$SUBSCRIPTION_ID" | jq -r '.[].name' | sort -u)
 fi
 for rg in "${RGS[@]}"; do
@@ -485,7 +507,8 @@ jq -n --arg version "$VERSION" --slurpfile resources "$TMP_RES" \
 jq -n --arg version "$VERSION" \
   --argjson rgs "$(printf "%s\n" "${RGS[@]}" | jq -R -s 'split("\n")|map(select(length>0))')" \
   --argjson edges "$EDGES_JSON" \
-  '{ "version":$version, "resourceGroups":$rgs, "rawEdges":$edges }' > "$REPORT"
+  --argjson skipped "$(printf "%s\n" "${SKIPPED_MANAGED_RGS[@]:-}" | jq -R -s 'split("\n")|map(select(length>0))')" \
+  '{ "version":$version, "resourceGroups":$rgs, "rawEdges":$edges, "skippedManagedResourceGroups": $skipped }' > "$REPORT"
 
 log_info "Done. Outputs in: $OUTDIR"
 log_info " - main.subscription.json"

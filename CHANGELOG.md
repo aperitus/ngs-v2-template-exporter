@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## v2.0.26
+- **Default safety:** Skip **managed** resource groups (those with `managedBy` or names ending with `_managed`) to avoid deny-assignments and platform-owned artifacts breaking deployments.
+- **Flag:** `--include-managed` to override the skip and include managed RGs.
+- **Cross-subscription hardening:** Inter‑RG `dependsOn` derived from VNet peerings are added **only when the remote VNet is in the same subscription**. Prevents invalid cross‑subscription dependencies in the wrapper.
+- **Compatibility:** Verified jq **1.6** syntax and kept behavior compatible with jq **1.7** (no reliance on new-only features).
+- **Docs:** README expanded (operators cheat sheet, managed RG behavior, cross‑sub guidance).
+
 ## v2.0.25
 - **Fix:** jq syntax errors from prior “ternary-like” patterns removed; replaced with valid `if/then/else` and additive objects.
 - **Feature:** Tag preservation **on by default** across VNets, NSGs, RTs, NAT GW, VNet GW, PIPs, PIPPs.
